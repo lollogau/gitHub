@@ -36,6 +36,20 @@
       </toolsSet>
       <compileType>
         <linkerTool>
+          <linkerLibItems>
+            <linkerLibProjectItem>
+              <makeArtifact PL="../../LaiCa"
+                            CT="3"
+                            CN="Debug"
+                            AC="true"
+                            BL="true"
+                            WD="../../LaiCa"
+                            BC="${MAKE}  -f Makefile CONF=Debug"
+                            CC="${MAKE}  -f Makefile CONF=Debug clean"
+                            OP="${CND_DISTDIR}/${CND_CONF}/${CND_PLATFORM}/liblaica.a">
+              </makeArtifact>
+            </linkerLibProjectItem>
+          </linkerLibItems>
           <commandLine>-litpp</commandLine>
         </linkerTool>
       </compileType>
