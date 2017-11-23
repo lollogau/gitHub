@@ -6,8 +6,8 @@ pilotIndex = 1; % The pilot symbol is the symbol of the constellation in positio
 
 hEnc = comm.LDPCEncoder;
 hMod = comm.PSKModulator(M, 'BitInput',true, 'PhaseOffset', 0);
-hChan = comm.AWGNChannel('NoiseMethod','Signal to noise ratio (SNR)','SNR',5);
-hDec = comm.LDPCDecoder('OutputValue','Whole codeword','DecisionMethod','Soft decision','MaximumIterationCount', 5);
+hChan = comm.AWGNChannel('NoiseMethod','Signal to noise ratio (SNR)','SNR',4);
+hDec = comm.LDPCDecoder('OutputValue','Whole codeword','DecisionMethod','Soft decision','MaximumIterationCount', 1);
 hError = comm.ErrorRate;
 
 constSymb = constellation(hMod); % Constellation
@@ -21,7 +21,7 @@ end
 release(hMod);
 
 noisevar = 1 / 10^(hChan.SNR/10);
-phasevar = 1;
+phasevar = (6 / 180 * pi)^2;
 
 data = logical(randi([0 1], 32400, 1)); % Message bits
 encodedData = hEnc(data); % Encoded bits
@@ -50,8 +50,8 @@ for i = 2:nSymb
     theta(i) = mod(theta(i-1) + randn() * sqrt(phasevar),2*pi);
 end
 
-% r = cPilot .* exp(theta*1i) + randn(nSymb,1) * sqrt(noisevar) + randn(nSymb,1) * sqrt(noisevar) * 1i;
-r = cPilot + randn(nSymb,1) * sqrt(noisevar) + randn(nSymb,1) * sqrt(noisevar) * 1i;
+r = cPilot .* exp(theta*1i) + randn(nSymb,1) * sqrt(noisevar) + randn(nSymb,1) * sqrt(noisevar) * 1i;
+% r = cPilot + randn(nSymb,1) * sqrt(noisevar) + randn(nSymb,1) * sqrt(noisevar) * 1i;
 
 % Symbol probability
 Pd = zeros(nSymb, M) + 1/M; % All symbols are equally probable at first iteration
@@ -75,26 +75,30 @@ for numIt = 1:100
     beta = Pd * abs(constSymb).^2; % Second order moment of ck distribution
     
     % Forward recursion
-    aForw = zeros(nSymb + 1,1);
-    for i = 2:nSymb + 1
+    aForw = zeros(nSymb,1);
+    for i = 2:nSymb
         aForw(i) = aForw(i-1) + (2 * r(i - 1) * conj(alpha(i - 1))) / (2 * noisevar + beta(i - 1) - abs(alpha(i - 1))^2);
+        aForw(i) = aForw(i) / (1 + phasevar * abs(aForw(i))); 
     end
     
     % Backward recursion
-    aBack = zeros(nSymb + 1,1);
-    for i = nSymb-1:-1:0
-        aBack(i + 1) = aBack(i + 2) + 2 * (r(i + 1) * conj(alpha(i + 1))) / (2 * noisevar + beta(i + 1) - abs(alpha(i + 1))^2);
+    aBack = zeros(nSymb,1);
+    for i = nSymb-1:-1:1
+        aBack(i) = aBack(i + 1) + 2 * (r(i + 1) * conj(alpha(i + 1))) / (2 * noisevar + beta(i + 1) - abs(alpha(i + 1))^2);
+        aBack(i) = aBack(i) / (1 + phasevar * abs(aBack(i))); 
     end
     
     % Message to the LDPC code
     Pu = zeros(nSymb, M);
     for i = 1:nSymb
+        sumNorm = -Inf;
         for j = 1:M
             % Pu(i,j) = exp(-abs(constSymb(j))^2 / (2 * noisevar)) * besseli(0, abs(aForw(i) + aBack(i) + (r(i) * conj(constSymb(j)))/noisevar));
             % Approximate the Besseli with the argument
-            Pu(i,j) = - (abs(constSymb(j))^2 / (2 * noisevar)) + abs(aForw(i + 1) + aBack(i) + ((r(i) * conj(constSymb(j)))/noisevar));
+            Pu(i,j) = - (abs(constSymb(j))^2 / (2 * noisevar)) + abs(aForw(i) + aBack(i) + ((r(i) * conj(constSymb(j)))/noisevar));
+            % sumNorm = jac(sumNorm, Pu(i,j));
         end
-        % Pu(i,:) = Pu(i,:) / sum(Pu(i,:)); % Normalitazion
+        % Pu(i,:) = Pu(i,:) - sumNorm; % Normalitazion
         Pu(i,:) = Pu(i,:) - max(Pu(i,:));
         Pu(i,:) = exp(Pu(i,:));
         Pu(i,:) = Pu(i,:) / sum(Pu(i,:));
@@ -167,8 +171,12 @@ for numIt = 1:100
     receivedBits(receivedBits > 0) = 0;
     receivedBits(receivedBits < 0) = 1;
     errors = sum(mod(receivedBits + data, 2));
-    fprintf("Errors: %d\n", errors);
+    fprintf('Errors: %d\n', errors);
     
     % Pd(pilotStep + 1:pilotStep + 1:end, :) = 0; % Other not pilot symbols (at pilot positions) have probability 0
     % Pd(pilotStep + 1:pilotStep + 1:end, pilotIndex) = 1; % The pilot symbols (at pilot positions) have probability 1
+end
+
+function res = jac(a,b)
+    res = max(a,b) + log(1 + exp(-abs(b - a)));
 end
