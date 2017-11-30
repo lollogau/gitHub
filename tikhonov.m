@@ -6,7 +6,7 @@ rng(15);
 %%%%%%%%%%%%%%% System Parameters %%%%%%%%%%%%%%%
 M = 4;                                                          % Constellation Cardinality
 R = 1/2;                                                        % Code Rate
-p = dvbs2ldpc(1/2);                                             % LDPC parity check matrix
+p = dvbs2ldpc(R);                                               % LDPC parity check matrix
 hEnc = comm.LDPCEncoder(p);                                     % Definition of the LDPC encoder
 hMod = comm.PSKModulator(M, 'BitInput',true, 'PhaseOffset', 0); % Definition of the Modulator
 obj = LDPCclass;                                                % Definition of the LDPC class
@@ -49,12 +49,12 @@ nPilot = nSymb / pilotStep;                                     % Number of pilo
 nSymbPilot = nSymb + nPilot;                                    % NUmber of symbols + pilot symbols
 
 %%%%%%%%%%%% Phase Noise Parameters %%%%%%%%%%%%
-sigmaDelta = 6;
+sigmaDelta = 0.3;
 phasevar = (sigmaDelta / 180 * pi)^2;                           % Variance of the phase in radiant
 
 
 %%%%%%%%%%%%%%%%%% Simulation %%%%%%%%%%%%%%%%%%
-EbN0 = -2:2;
+EbN0 = 6:6;
 for l = 1:length(EbN0)
     
     noisevar = 1 / (log2(M) * R * 10^(EbN0(l)/10)); % Noise variance
@@ -92,7 +92,6 @@ for l = 1:length(EbN0)
         
         %%%%%%%%%% Bits probability %%%%%%%%%%
         bitProb = zeros(length(encodedData), 2) + 0.5;        % At first iteration all bits are equally probable
-        LDPC_reset(obj); % Reset the state of the LDPC
         
         LDPC_reset(obj); % Reset the state of the LDPC
         
@@ -104,28 +103,28 @@ for l = 1:length(EbN0)
             alpha = Pd * constSymb;            % First order moment of ck distribution
             beta = Pd * abs(constSymb).^2;     % Second order moment of ck distribution
             
-            % Forward recursion (32)
+            %%% Forward recursion (32) %%%
             aForw = zeros(nSymbPilot,1);
             for i = 2:nSymbPilot
                 aForw(i) = aForw(i-1) + (2 * r(i - 1) * conj(alpha(i - 1))) / (2 * noisevar + beta(i - 1) - abs(alpha(i - 1))^2);
                 aForw(i) = aForw(i) / (1 + phasevar * abs(aForw(i)));
             end
             
-            % Backward recursion (34)
+            %%% Backward recursion (34) %%%
             aBack = zeros(nSymbPilot,1);
             for i = nSymbPilot-1:-1:1
                 aBack(i) = aBack(i + 1) + 2 * (r(i + 1) * conj(alpha(i + 1))) / (2 * noisevar + beta(i + 1) - abs(alpha(i + 1))^2);
                 aBack(i) = aBack(i) / (1 + phasevar * abs(aBack(i)));
             end
             
-            % Message to the LDPC code (35). In log domain approximate the Besseli with the argument
+            %%% Message to the LDPC code (35). In log domain approximate the Besseli with the argument %%%
             Pu = - (abs(transpose(constSymb)).^2 ./ (2 * noisevar)) + abs(aForw + aBack + (r * transpose(conj(constSymb)))/noisevar);
             Pu = exp(Pu - max(Pu,[],2)); % Normalization
             Pu = Pu ./ sum(Pu, 2);
-            
-            % Higher part of the FG: from Pu(ck) to bit LLR
             pilotlessPu = Pu;
             pilotlessPu(1+pilotStep:1+pilotStep:end,:) = [];
+            
+            %%% From soft symbols to bit LLR %%%
             bitCounter = 1;
             bitLLR = zeros(1,length(encodedData));
             exponent = sizeComb(2) + 1;
@@ -164,32 +163,33 @@ for l = 1:length(EbN0)
             
             [receivedLLR, wsyn] = LDPC_decode(obj, bitLLR');
             
-            %%%%%%%% From LLR to symbols probabilities %%%%%%%%
-            bitProb(:,1) = exp(receivedLLR) ./ (1 + exp(receivedLLR)); % Probability of bit to be = 0
-            bitProb(:,2) = 1 ./ (1 + exp(receivedLLR)); % Probability of bit to be = 1
+            %%% From bit LLR to bit probabilities %%%
+            bitProb(:,1) = exp(receivedLLR) ./ (1 + exp(receivedLLR));  % Probability of bit to be = 0
+            bitProb(:,2) = 1 ./ (1 + exp(receivedLLR));                 % Probability of bit to be = 1
             
-            %%%%%%%% Symbol probabilities %%%%%%%%
-            Pd = ones(nSymbPilot, M);
+            %%% From bit to symbol probabilities %%%
+            pilotlessPd = ones(nSymbPilot, M);
             ii = 1;
-            for i = 1:log2(M):length(receivedLLR)
+            for i = 1:log2(M):codewordLength
                 if (mod(ii, pilotStep + 1) == 0)
                     ii = ii + 1;
                 end
                 for j = 1:M
                     for z = 1:log2(M)
-                        Pd(ii, j) = Pd(ii, j) * bitProb(i + z - 1, constBits(j,z) + 1);
+                        pilotlessPd(ii, j) = pilotlessPd(ii, j) * bitProb(i + z - 1, constBits(j,z) + 1);
                     end
                 end
                 ii = ii + 1;
             end
             
-            %%%%%%%% Pilot Insertion %%%%%%%%
-            Pd(pilotStep + 1:pilotStep + 1:end, :) = 0; % Other not pilot symbols (at pilot positions) have probability 0
-            Pd(pilotStep + 1:pilotStep + 1:end, pilotIndex) = 1; % The pilot symbols (at pilot positions) have probability 1
+            %%% Pilot Insertion %%%
+            Pd(pilotStep + 1:pilotStep + 1:end, :) = 0;           % Not pilot symbols (at pilot positions) have probability 0
+            Pd(pilotStep + 1:pilotStep + 1:end, pilotIndex) = 1;  % Pilot symbols (at pilot positions) have probability 1
             
             if(wsyn == 0 || isnan(wsyn))
                 break;
             end
+            fprintf('wsyn: %d \n', wsyn);
         end
         
         %%%%%%%%%% Error Counting %%%%%%%%%%
@@ -200,6 +200,7 @@ for l = 1:length(EbN0)
             errors = sum(mod(receivedBits + data, 2));
             trials = trials + messageLength;
         end
+        fprintf('EbN0: %f \t BER: %f \n', EbN0(l), errors/trials);
     end
     fprintf('EbN0: %f \t BER: %f \n', EbN0(l), errors/trials);
 end
