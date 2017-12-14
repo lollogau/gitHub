@@ -10,8 +10,7 @@ p = dvbs2ldpc(R);                                               % LDPC parity ch
 hEnc = comm.LDPCEncoder(p);                                     % Definition of the LDPC encoder
 hMod = comm.PSKModulator(M, 'BitInput',true, 'PhaseOffset', 0); % Definition of the Modulator
 obj = LDPCclass;                                                % Definition of the LDPC class
-% LDPC_initialization(obj, p, 1, 'save');                       % Initialize LDPC class ('save' to save matrices, must be called once)
-LDPC_initialization(obj, p, 1, 'load');                         % Initialize LDPC class ('load' to load matrices saved before)
+LDPC_initialization(obj, p, 1);                                 % Initialize LDPC class
 codewordLength = 64800;                                         % Number of coded bits
 messageLength = 64800 * R;                                      % Length of the data message
 nSymb = codewordLength / log2(M);                               % Number of Symbols
