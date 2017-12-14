@@ -15,6 +15,8 @@ classdef LDPCclass < handle
         indexCN                 % Indeces of check nodes connected to each variable node (equivalent to CheckNodesIndex, but in matrix form, more efficient)
         indexVN                 % Indices of variable nodes connected to each check node (equivalent to VariableNodesIndex, but in matrix form, more efficient)
         Syndrome                % LDPC Syndrome
+        nCNmaxSize              % Maximum number of CN linked to a VN
+        nVNmaxSize              % Maximum number of VN linked to a CN
     end
     
     methods
@@ -35,10 +37,10 @@ classdef LDPCclass < handle
             for numIt = 1:obj.MaxNumberIterations
                 
                 % Check Nodes Update
-                count = ones(1, obj.nCN);
-%                 count1 = ones(1, obj.nCN);
+                count = ones(obj.nCN, 1);
+                %                 count1 = ones(1, obj.nCN);
                 sumTot = sum(MessageCheckToVariable_local, 2); % Sum of incoming messages (from check nodes) for each variable node
-%                 height = size(MessageVariableToCheck_local);
+                %                 height = size(MessageVariableToCheck_local);
                 for i = 1:obj.nVN % For each variable node
                     for j = 1:length(CheckNodesIndex_local{i}) % For each check node connected to the variable node of index i
                         % The message from the variable node to the check node is equal to the sum of messages to the check node minus the
@@ -51,26 +53,25 @@ classdef LDPCclass < handle
                         % variable node (to the same check node), has to be located in position (i,j+1).
                         count(indexCN_local(i,j)) = count(indexCN_local(i,j)) + 1;
                     end
-                    % Try to vectorize the inner for
-%                     nCNforVN = length(CheckNodesIndex_local{i});
-%                     v = 1:nCNforVN;
-%                     % ind = sub2ind(size(MessageVariableToCheck_local), indexCN_local(i,1:nCNforVN), count1(indexCN_local(i,1:nCNforVN)));
-%                     ind = indexCN_local(i,v) + height(1) * (count1(indexCN_local(i,v)) - 1);
-%                     MessageVariableToCheck_local(ind) = bitLLR(i) + sumTot(i) - MessageCheckToVariable_local(i,v);
-%                     count1(indexCN_local(i,v)) = count1(indexCN_local(i,v)) + 1;
+                    % Try to vectorize the inner for loop, poor performance 
+                    %                     nCNforVN = length(CheckNodesIndex_local{i});
+                    %                     v = 1:nCNforVN;
+                    %                     % ind = sub2ind(size(MessageVariableToCheck_local), indexCN_local(i,1:nCNforVN), count1(indexCN_local(i,1:nCNforVN)));
+                    %                     ind = indexCN_local(i,v) + height(1) * (count1(indexCN_local(i,v)) - 1);
+                    %                     MessageVariableToCheck_local(ind) = bitLLR(i) + sumTot(i) - MessageCheckToVariable_local(i,v);
+                    %                     count1(indexCN_local(i,v)) = count1(indexCN_local(i,v)) + 1;
                 end
                 
                 % Variable Nodes Update
                 count = ones(1,obj.nVN);
-                % NOTE: numerical proble related to the fact that MessageVariableToCheck martix may contains zeros, if there one variable 
+                % NOTE: numerical proble related to the fact that MessageVariableToCheck martix may contains zeros, if there one variable
                 % node has less connections with respect to the others. In this case, in order to make the algorithm usable in all cases,
                 % we set zero elements in the matrix equal to a large number, e.g. 50, such that the tanh(50 / 2) = 1, and the one is irrelevant
-                % in the product. Thanks to this, it is possible to extend the dimension of MessageVariableToCheck to embrace all possible 
+                % in the product. Thanks to this, it is possible to extend the dimension of MessageVariableToCheck to embrace all possible
                 % cases, wrt to different parity check matrices, without any problem.
                 MessageVariableToCheck_local(MessageVariableToCheck_local == 0) = 50; % Make the tanh = 1 for the product
                 prodTot = prod(tanh(MessageVariableToCheck_local / 2), 2);
                 for i = 1:obj.nCN
-                    % prodTot1 = prod(tanh(MessageVariableToCheck_local(i, 1:length(VariableNodesIndex_local{i})) / 2), 2);
                     for j = 1:length(VariableNodesIndex_local{i})
                         MessageCheckToVariable_local(indexVN_local(i,j), count(indexVN_local(i,j))) = 2 * atanh(prodTot(i) / tanh(MessageVariableToCheck_local(i,j) / 2));
                         count(indexVN_local(i,j)) = count(indexVN_local(i,j)) + 1;
@@ -109,10 +110,8 @@ classdef LDPCclass < handle
         % a specific variable node (for each variable node).
         % matVn is the filename containing the indices of the variable nodes connected
         % to a specific check node (for each check node).
-        % Take indices of nonzero elements of ldpc matrix,  save them into a cell
-        % array and then the cell array into a file.
-        % The string select if the function has to save or read the matrices.
-        function LDPC_initialization(obj, p, It, cmd)
+        % Take indices of nonzero elements of ldpc matrix,  save them into a cell array.
+        function LDPC_initialization(obj, p, It)
             
             obj.ParityCheckMatrix = p; % Parity Check Matrix
             
@@ -122,45 +121,46 @@ classdef LDPCclass < handle
             obj.nVN = matDim(2); % Number of variable nodes
             obj.nCN = matDim(1); % NUmber of check nodes
             
-            if (cmd == 'save')
-                % Save indices of check nodes for each variable node
-                CN = cell(1, obj.nVN);
-                for i = 1:obj.nVN
-                    CN{i} = find(obj.ParityCheckMatrix(:,i))';
+            % Save indices of check nodes for each variable node
+            nVNmaxSize_local = 0; 
+            CN = cell(1, obj.nVN);
+            for i = 1:obj.nVN
+                CN{i} = find(obj.ParityCheckMatrix(:,i))';
+                if (length(CN{i}) > nVNmaxSize_local)
+                    nVNmaxSize_local = length(CN{i});
                 end
-                save(obj.matCNI, 'CN')
-                
-                % Save indices of variable nodes for each check node
-                VN = cell(1, obj.nCN);
-                for i = 1:obj.nCN
-                    VN{i} = find(obj.ParityCheckMatrix(i,:));
-                end
-                save(obj.matVNI, 'VN')
-                
-                obj.CheckNodesIndex = CN;
-                obj.VariableNodesIndex = VN;
             end
             
-            if (cmd == 'load')
-                load(obj.matCNI);
-                load(obj.matVNI);
-                obj.CheckNodesIndex = CN;
-                obj.VariableNodesIndex = VN;
+            % Save indices of variable nodes for each check node
+            ParityCheckMatrixT = transpose(obj.ParityCheckMatrix);
+            nCNmaxSize_local = 0;
+            VN = cell(1, obj.nCN);
+            for i = 1:obj.nCN
+                VN{i} = find(ParityCheckMatrixT(:,i));
+                if (length(VN{i}) > nCNmaxSize_local)
+                    nCNmaxSize_local = length(VN{i});
+                end
             end
             
-            obj.MessageCheckToVariable = zeros(obj.nVN, 15); % Message from check to variable nodes
-            obj.MessageVariableToCheck = zeros(obj.nCN, 15); % Message from variable to check nodes
+            obj.nCNmaxSize = nCNmaxSize_local;
+            obj.nVNmaxSize = nVNmaxSize_local;
             
-            CheckNodesIndex_local = obj.CheckNodesIndex; % Indeces of check nodes saved in a cell array
-            VariableNodesIndex_local = obj.VariableNodesIndex; % Indeces of variable nodes saved in a cell array
+            obj.CheckNodesIndex = CN;
+            obj.VariableNodesIndex = VN;
+            
+            obj.MessageCheckToVariable = zeros(obj.nVN, nVNmaxSize_local); % Message from check to variable nodes
+            obj.MessageVariableToCheck = zeros(obj.nCN, nCNmaxSize_local); % Message from variable to check nodes
+            
+            CheckNodesIndex_local = obj.CheckNodesIndex;        % Indeces of check nodes saved in a cell array
+            VariableNodesIndex_local = obj.VariableNodesIndex;  % Indeces of variable nodes saved in a cell array
             
             % Indeces of check nodes saved in a matrix, to improve speed performance
-            indexCN_local = zeros(obj.nVN, 30);
+            indexCN_local = zeros(obj.nVN, nVNmaxSize_local);
             for i = 1:obj.nVN
                 indexCN_local(i,1:length(CheckNodesIndex_local{i})) = CheckNodesIndex_local{i};
             end
             % Indeces of variable nodes saved in a matrix, to improve speed performance
-            indexVN_local = zeros(obj.nVN, 30);
+            indexVN_local = zeros(obj.nVN, nCNmaxSize_local);
             for i = 1:obj.nCN
                 indexVN_local(i,1:length(VariableNodesIndex_local{i})) = VariableNodesIndex_local{i};
             end
@@ -169,11 +169,11 @@ classdef LDPCclass < handle
             obj.indexVN = indexVN_local;
         end
         
-        % Reset internal messages of the LDPC graph. Must be called each time a new decoding stage starts. If joint detection/decoding 
+        % Reset internal messages of the LDPC graph. Must be called each time a new decoding stage starts. If joint detection/decoding
         % is performed, this method must be called before the iterations of the joint detector/decoder.
         function LDPC_reset(obj)
-            obj.MessageCheckToVariable = zeros(obj.nVN, 15); % Message from check to variable nodes
-            obj.MessageVariableToCheck = zeros(obj.nCN, 15); % Message from variable to check nodes
+            obj.MessageCheckToVariable = zeros(obj.nVN, obj.nVNmaxSize); % Message from check to variable nodes
+            obj.MessageVariableToCheck = zeros(obj.nCN, obj.nCNmaxSize); % Message from variable to check nodes
         end
     end
     
