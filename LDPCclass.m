@@ -74,6 +74,8 @@ classdef LDPCclass < handle
                 prodTot = prod(tanh(MessageVariableToCheck_local / 2), 2);
                 tanhMat = tanh(MessageVariableToCheck_local / 2);
                 atanhMat = 2 * atanh((tanhMat ./ prodTot).^(-1));
+                atanhMat(atanhMat == Inf) = 18.715;
+                atanhMat(atanhMat == -Inf) = -18.715;
                 height = length(MessageCheckToVariable_local);
                 for i = 1:obj.nCN
                     for j = 1:VariableNodesIndexLength_local(i)
