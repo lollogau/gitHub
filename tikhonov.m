@@ -2,23 +2,34 @@ clc
 clear
 
 rng(15);                                                        % Noise generator
-fid = fopen('results_64QAM_R082_sigmaDelta005.txt','w');
 
 %%%%%%%%%%%%%%% System Parameters %%%%%%%%%%%%%%%
-M = 64;                                                          % Constellation Cardinality
-R = 5/6;                                                        % Code Rate
-p = dvbs2ldpc(R);                                               % LDPC parity check matrix
+M = 8;                                                          % Constellation Cardinality
+% p = dvbs2ldpc(R);                                               % LDPC parity check matrix
+load('p_paper.mat');
+pSize = size(p);
+codewordLength = pSize(2);                                      % Codeword Length
+messageLength = pSize(2) - pSize(1);                            % Message Length
+R = messageLength / codewordLength;                             % Code Rate
 hEnc = comm.LDPCEncoder(p);                                     % Definition of the LDPC encoder
-% hMod = comm.PSKModulator(M, 'BitInput', true, 'PhaseOffset',0); % Definition of the PSK Modulator
-hMod = comm.RectangularQAMModulator(M, 'BitInput', true, ...    
-    'NormalizationMethod', 'Average power');                    % Definition of the QAM Modulator
+hMod = comm.PSKModulator(M, 'BitInput', true, 'PhaseOffset',0); % Definition of the PSK Modulator
+% hMod = comm.RectangularQAMModulator(M, 'BitInput', true, ...    
+    % 'NormalizationMethod', 'Average power');                    % Definition of the QAM Modulator
 obj = LDPCclass;                                                % Definition of the LDPC class
 LDPC_initialization(obj, p, 1);                                 % Initialize LDPC class
-codewordLength = 64800;                                         % Number of coded bits
-messageLength = 64800 * R;                                      % Length of the data message
 nSymb = codewordLength / log2(M);                               % Number of Symbols
 maxIt = 100;                                                    % Number of detector/decoder iterations
-EbN0 = 11.2;                                                     % Signal to noise ratio
+EbN0 = 8;                                                     % Signal to noise ratio
+
+%%%%%%%%%%% File Writing %%%%%%%%%%%
+fid = fopen('results.txt','w');
+fprintf(fid, 'PID: %d \n', feature('getpid'));
+fprintf(fid, 'Tikhonov Algorithm. Max %d iterations. \n', maxIt);
+fprintf(fid, 'Modulation: PSK \t M = %d \n', M);
+fprintf(fid, 'LDPC: R = %f \t p = %dx%d \n', R, pSize(1), pSize(2));
+fprintf(fid, 'EbN0 = ');
+fprintf(fid, '%.2f ', EbN0);
+fprintf(fid, '\n');
 
 %%%%%%%%%%% Constellation Management %%%%%%%%%%%%
 constSymb = constellation(hMod);                                % Constellation symbols
@@ -32,14 +43,14 @@ for i = 0:2^(log2(M))-1
 end
 release(hMod);
 
+%%%%%%%%%%% Code Optimization %%%%%%%%%%%
 comb = zeros(log2(M)-1, 2^(log2(M)-1));                         % Each possible combination of bits
 for i = 0:2^(log2(M)-1)-1
     comb(:, i+1) = double(dec2bin(i, log2(M)-1)) - 48;
 end
 sizeComb = size(comb);
 
-%%%%%%%%%%% Code Optimization %%%%%%%%%%%
-positionsMat = zeros(log2(M) - 1, codewordLength);              % Each column indicates the positions of the (log2(M)-1) bits, taking into account that one bit is set in a specific position
+positionsMat = zeros(log2(M) - 1, codewordLength);              % Each column indicates the positions of the (log2(M)-1) bits, taking into account that last one bit is set in a specific position
 for i = 0:codewordLength - 1
     positions = log2(M) * floor(i/log2(M)) + 1:log2(M) *...
         floor(i/log2(M)) + 1 + log2(M) - 1;
@@ -55,6 +66,7 @@ for i = 0:log2(M) - 1
         bitPosition+1:log2(M)];
 end
 
+int = zeros(2, sizeComb(2), log2(M));
 for bitPosition = 1:log2(M)                                     % Position of bit bk in the log2(M) bits
     for bk = 0:1                                                % Bit bk composing ck, want to calculate the LLR
         for j = 1:sizeComb(2)
@@ -69,25 +81,31 @@ for bitPosition = 1:log2(M)                                     % Position of bi
     end
 end
 
+bitsGroup = zeros(codewordLength, 1);
+bitPosition = zeros(codewordLength, 1);
+ for i = 0:codewordLength - 1
+    bitsGroup(i + 1) = floor(i/log2(M)) + 1;                    % log2(M)-upla index
+    bitPosition(i + 1) = mod(i, log2(M)) + 1;                   % Position of bit bk in the log2(M) bits
+ end
+
 %%%%%%%%%%%%%%%% Pilot Symbols %%%%%%%%%%%%%%%%%
 pilotIndex = 1;                                                 % The pilot symbol is the symbol of the constellation in position pilotIndex of constSymb
 pilotSymbol = constSymb(pilotIndex);                            % Pilot symbol
-pilotStep = 20;                                                 % Step between pilot symbols
+pilotStep = 21;                                                 % Step between pilot symbols
 nGroupPilot = 1;                                                % Number of pilot inserted at each step
 nPilot = (nSymb / pilotStep) * nGroupPilot;                     % Number of pilot symbols
 nSymbPilot = nSymb + nPilot;                                    % Number of symbols + pilot symbols
 
 %%%%%%%%%%%% Phase Noise Parameters %%%%%%%%%%%%
 sigmaDelta = 1;
-phasevar = (sigmaDelta / 180 * pi)^2;                           % Variance of the phase in radiant
-phasevar = 0.05^2;
+phasevar = 0.1^2; %(sigmaDelta / 180 * pi)^2;                           % Variance of the phase in radiant
 
 %%%%%%%%%%%%%%%%%% Simulation %%%%%%%%%%%%%%%%%%
 phasevarTik = phasevar;
 for l = 1:length(EbN0)
     
     noisevar = 1 / (2 * log2(M) * R * 10^(EbN0(l)/10));         % Noise variance
-    % noisevar = 1 / (2 * (codewordLength / nSymbPilot) * R * 10^(EbN0(l)/10));         % Noise variance
+    % noisevar = 1 / (2 * (codewordLength / nSymbPilot) * R * 10^(EbN0(l)/10));         % Noise variance taking into account pilot symbols degradation
     
     trials = 0;
     errors = 0;
@@ -98,7 +116,6 @@ for l = 1:length(EbN0)
         %%%%%%%%%% Information Part %%%%%%%%%%
         data = logical(randi([0 1], messageLength, 1));         % Message bits
         encodedData = hEnc(data);                               % Encoded bits
-        encodedData(4096:4098) = 1;
         c = hMod(encodedData);                                  % Modulated symbols
         
         %%%%%%% Pilot symbols insertion %%%%%%
@@ -116,8 +133,7 @@ for l = 1:length(EbN0)
         
         %%%%%%%%%%%%%% Channel %%%%%%%%%%%%%%%
         r = cPilot .* exp(theta*1i) + randn(nSymbPilot,1) * sqrt(noisevar) + randn(nSymbPilot,1) * sqrt(noisevar) * 1i;
-        % r = cPilot + randn(nSymbPilot,1) * sqrt(noisevar) + randn(nSymbPilot,1) * sqrt(noisevar) * 1i;  
-
+        
         %%%%%%%%% Symbol probability %%%%%%%%%
         Pd = zeros(nSymbPilot, M) + 1/M;                           % All symbols are equally probable at first iteration
         Pd = reshape(Pd, pilotStep + nGroupPilot, (nSymbPilot * M)/(pilotStep + nGroupPilot));
@@ -131,7 +147,6 @@ for l = 1:length(EbN0)
         LDPC_reset(obj);                                      % Reset the state of the LDPC
         
         bitLLR = zeros(codewordLength, 1);                    % Bit LLR vector
-        probBit = zeros(1,2);                                 % Bit probability vector, to store and then calculate the LLR
         
         %%%%%%%%% Tikhonov Algorithm %%%%%%%%%
         for numIt = 1:maxIt
@@ -153,53 +168,38 @@ for l = 1:length(EbN0)
                 aBack(i) = aBack(i) / (1 + phasevarTik * abs(aBack(i)));
             end
             
-            %%% Message to the LDPC code (35). In log domain approximapositionsCellte the Besseli with the argument %%%
+            %%% Message to the LDPC code (35). In log domain approximate the Besseli with the argument %%%
             Pu = - (abs(transpose(constSymb)).^2 ./ (2 * noisevar)) + abs(aForw + aBack + (r * transpose(conj(constSymb)))/noisevar);
             Pu = exp(Pu - max(Pu,[],2)); % Normalization
-            Pu = Pu ./ sum(Pu, 2);
+            Pu = Pu ./ sum(Pu, 2);       % Normalization
             pilotlessPu = Pu;
             pilotlessPu = reshape(pilotlessPu, pilotStep + nGroupPilot, (nSymbPilot * M)/(pilotStep + nGroupPilot));
             pilotlessPu(pilotStep + 1:pilotStep + nGroupPilot,:) = [];
             pilotlessPu = reshape(pilotlessPu, nSymb, M);
 
             %%% From soft symbols to bit LLR %%%
-            bitProbT = transpose(bitProb);
+            bitProbT = transpose(bitProb);                                 
+            probBit = zeros(codewordLength, 2);                            % Bit probability vector, to store and then calculate the LLR
             for i = 0:codewordLength - 1
-                bitsGroup = floor(i/log2(M)) + 1;                          % log2(M)-upla index
-                bitPosition = mod(i, log2(M)) + 1;                         % Position of bit bk in the log2(M) bits
-                probBit = probBit - probBit;                               % Equivalent to probBit = zeros(1,2) but faster
-                for bk = 0:1                                               % Bit bk composing ck, want to calculate the LLR
+                for bk = 0:1                                               % Bit bk composing the symbol ck
                     for j = 1:sizeComb(2)
-                        mu = 1;                                            % Message from the other nodes
+                        mu = 1;                                            % Message from the other nodes, i.e. bits composing the symbol ck
                         for jj = 1:sizeComb(1)
                             mu = mu * bitProbT(positionsMat(jj, i + 1) * 2 - 1 + comb(jj, j)); % Note: the *2 is necessary since the element is selected by index
                         end
-                        probBit(bk + 1) = probBit(bk + 1) + mu * pilotlessPu(bitsGroup, constIntToGray(int(bk + 1, j, bitPosition) + 1)); % Bit probability
+                        probBit(i + 1, bk + 1) = probBit(i + 1, bk + 1) + mu * pilotlessPu(bitsGroup(i + 1), constIntToGray(int(bk + 1, j, bitPosition(i + 1)) + 1)); % Bit probability
                     end
                 end
-                bitLLR(i + 1) = log(probBit(1) / probBit(2));              % Bit LLR
+                bitLLR(i + 1) = log(probBit(i + 1, 1) / probBit(i + 1, 2));  % Bit LLR
             end
             
             [receivedLLR, wsyn] = LDPC_decode(obj, bitLLR);
             
             receivedLLR(receivedLLR == Inf) = 300;
             receivedLLR(receivedLLR == -Inf) = -300;
-                        
+                 
             %%% From bit LLR to bit probabilities %%%
-            bitProb(:,2) = 1 ./ (1 + exp(receivedLLR));                    % Probability of bit to be = 1
-            bitProb(:,1) = 1 - bitProb(:,2);                               % Probability of bit to be = 0
-            
-            %%% From bit to symbol probabilities %%%
-            Pd = ones(nSymb, M);
-            ii = 1;
-            for i = 1:log2(M):codewordLength
-                for j = 1:M
-                    for z = 1:log2(M)
-                        Pd(ii, j) = Pd(ii, j) * bitProb(i + z - 1, constBits(j,z) + 1); % Implicit indicator function given by the selection of the j-th row of constBits
-                    end
-                end
-                ii = ii + 1;
-            end
+            Pd = bitLLR2symbProb(receivedLLR, constBits);
             
             %%% Pilot Insertion %%%
             Pd = reshape(Pd, pilotStep, (nSymb * M)/pilotStep);
@@ -222,11 +222,12 @@ for l = 1:length(EbN0)
             if (errorCount ~= 0)
                 errors = errors + errorCount;
                 pckErrors = pckErrors + 1;
+                fprintf(fid, 'EbN0: %f \t Errors: %d\t Trials: %d\t PckErr: %d\t BER: %e\n', EbN0(l), pckErrors, pckTrials, pckErrors, errors/trials);
             end
             trials = trials + length(data);
             pckTrials = pckTrials + 1;
-            fprintf('Errors: %d\t Trials: %d\t PckErr: %d\t BER: %e\n', errors, trials, pckErrors, errors/trials);
+            % fprintf('Errors: %d\t Trials: %d\t BER: %e\n', pckErrors, pckTrials, errors/trials);
         end
     end
-    fprintf(fid, 'EbN0: %f \t BER: %e \n', EbN0(l), errors/trials);
+    fprintf(fid, 'EbN0: %f \t Errors: %d\t Trials: %d\t PckErr: %d\t BER: %e\n', EbN0(l), pckErrors, pckTrials, pckErrors, errors/trials);
 end
